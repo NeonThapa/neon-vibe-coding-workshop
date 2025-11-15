@@ -1,0 +1,755 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Neon Cross</title>
+<style>
+:root {
+  color-scheme: light;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #b3e5ff 0%, #e0f7ff 30%, #fdfaf2 100%);
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: #0f1821;
+}
+canvas {
+  width: min(94vw, 1080px);
+  height: auto;
+  max-height: 92vh;
+  aspect-ratio: 16 / 9;
+  background: #87c7ff;
+  border-radius: 22px;
+  box-shadow: 0 18px 45px rgba(42, 63, 93, 0.35), 0 0 65px rgba(17, 42, 84, 0.35);
+  border: 3px solid rgba(255, 255, 255, 0.7);
+}
+</style>
+</head>
+<body>
+<canvas id="game" width="960" height="540"></canvas>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  const WIDTH = canvas.width;
+  const HEIGHT = canvas.height;
+  const GRID_COLS = 32;
+  const GRID_ROWS = 18;
+  const TILE = WIDTH / GRID_COLS;
+  const startRow = GRID_ROWS - 3;
+  const STORAGE_KEY = 'neonCrossBestScore';
+
+  // Layout from top (row 0) downwards.
+  const rowLayout = [
+    'goal',
+    'campus',
+    'safe',
+    'road',
+    'road',
+    'safe',
+    'river',
+    'safe',
+    'road',
+    'road',
+    'safe',
+    'road',
+    'road',
+    'safe',
+    'road',
+    'start',
+    'start',
+    'start'
+  ];
+
+  const rowColors = {
+    goal: '#ffe199',
+    campus: '#f7c066',
+    safe: '#7fd183',
+    road: '#545454',
+    river: '#1b75c8',
+    start: '#8ad999'
+  };
+
+  // Each lane describes a moving hazard row.
+  const laneDefinitions = [
+    { row: 3, type: 'road', direction: 1, baseSpeed: 120, spawnInterval: 2.3, palette: ['#ff6d6d', '#ffa94d', '#ffcf56'] },
+    { row: 4, type: 'road', direction: -1, baseSpeed: 150, spawnInterval: 2.0, palette: ['#419dff', '#33c2ff', '#7dd3ff'] },
+    { row: 6, type: 'river', direction: 1, baseSpeed: 65, spawnInterval: 2.5, palette: ['#8d6e63', '#b08968', '#a97155'] },
+    { row: 8, type: 'road', direction: -1, baseSpeed: 165, spawnInterval: 1.8, palette: ['#f94144', '#ef476f', '#f3722c'] },
+    { row: 9, type: 'road', direction: 1, baseSpeed: 145, spawnInterval: 1.9, palette: ['#0ead69', '#06d6a0', '#2ec4b6'] },
+    { row: 11, type: 'road', direction: -1, baseSpeed: 175, spawnInterval: 1.7, palette: ['#ffd166', '#f4a261', '#e76f51'] },
+    { row: 12, type: 'road', direction: 1, baseSpeed: 155, spawnInterval: 1.8, palette: ['#4dabf7', '#4895ef', '#560bad'] },
+    { row: 14, type: 'road', direction: -1, baseSpeed: 135, spawnInterval: 2.2, palette: ['#7bd389', '#52b788', '#2d6a4f'] }
+  ];
+
+  class Lane {
+    constructor(definition) {
+      this.row = definition.row;
+      this.y = this.row * TILE;
+      this.type = definition.type;
+      this.direction = definition.direction;
+      this.baseSpeed = definition.baseSpeed;
+      this.spawnInterval = definition.spawnInterval;
+      this.palette = definition.palette;
+      this.entities = [];
+      this.spawnTimer = randomRange(0.2, this.spawnInterval);
+    }
+
+    reset() {
+      this.entities = [];
+      this.spawnTimer = randomRange(0.2, this.spawnInterval);
+    }
+
+    update(dt, difficulty) {
+      // Cars/logs glide horizontally each frame.
+      this.entities.forEach(entity => {
+        entity.x += this.direction * entity.speed * dt * difficulty;
+      });
+      this.entities = this.entities.filter(entity => entity.x + entity.width > -120 && entity.x < WIDTH + 120);
+      this.spawnTimer -= dt;
+      if (this.spawnTimer <= 0) {
+        this.spawnEntity(difficulty);
+        const spawnModifier = 1 + (difficulty - 1) * 0.5;
+        this.spawnTimer = (this.spawnInterval * randomRange(0.68, 1.08)) / spawnModifier;
+      }
+    }
+
+    spawnEntity(difficulty) {
+      if (this.type === 'road') this.spawnCar(difficulty);
+      if (this.type === 'river') this.spawnLog();
+    }
+
+    spawnCar(difficulty) {
+      const width = randomRange(TILE * 1.7, TILE * 2.7);
+      const height = TILE * 0.7;
+      const x = this.direction === 1 ? -width - 40 : WIDTH + 40;
+      const y = this.y + (TILE - height) / 2;
+      const speed = this.baseSpeed * randomRange(0.9, 1.15);
+      const color = pick(this.palette);
+      const car = { x, y, width, height, color, speed, windowColor: 'rgba(255,255,255,0.9)' };
+      this.entities.push(car);
+    }
+
+    spawnLog() {
+      const width = randomRange(TILE * 2.5, TILE * 4);
+      const height = TILE * 0.6;
+      const x = this.direction === 1 ? -width - 40 : WIDTH + 40;
+      const y = this.y + (TILE - height) / 2;
+      const speed = this.baseSpeed * randomRange(0.9, 1.1);
+      const color = pick(this.palette);
+      const log = { x, y, width, height, color, speed };
+      this.entities.push(log);
+    }
+
+    draw(ctx) {
+      if (this.type === 'road') {
+        this.entities.forEach(drawCar);
+      } else if (this.type === 'river') {
+        this.entities.forEach(drawLog);
+      }
+    }
+  }
+
+  const lanes = laneDefinitions.map(def => new Lane(def));
+  const laneLookup = {};
+  lanes.forEach(lane => {
+    laneLookup[lane.row] = lane;
+  });
+
+  const player = {
+    gridX: Math.floor(GRID_COLS / 2),
+    gridY: startRow,
+    width: TILE * 0.7,
+    height: TILE * 0.95,
+    hopTime: 0,
+    hopDuration: 0.18,
+    squashTime: 0,
+    lives: 3
+  };
+
+  let state = 'menu';
+  let score = 0;
+  let bestScore = Number(localStorage.getItem(STORAGE_KEY)) || 0;
+  let deaths = 0;
+  let flashTimer = 0;
+  const flashDuration = 0.35;
+  let titlePulse = 0;
+  let lastTime = performance.now();
+
+  const audioEngine = {
+    ctx: null,
+    muted: false,
+    ensure() {
+      if (this.ctx || typeof AudioContext === 'undefined') return;
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) this.ctx = new AudioCtx();
+    },
+    play(frequency, duration = 0.16, type = 'sine') {
+      if (this.muted) return;
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      if (!this.ctx) this.ctx = new AudioCtx();
+      const now = this.ctx.currentTime;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = type;
+      osc.frequency.value = frequency;
+      gain.gain.setValueAtTime(0.18, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+      osc.connect(gain).connect(this.ctx.destination);
+      osc.start(now);
+      osc.stop(now + duration);
+    }
+  };
+
+  const moveMap = {
+    arrowup: { x: 0, y: -1 },
+    arrowdown: { x: 0, y: 1 },
+    arrowleft: { x: -1, y: 0 },
+    arrowright: { x: 1, y: 0 },
+    w: { x: 0, y: -1 },
+    s: { x: 0, y: 1 },
+    a: { x: -1, y: 0 },
+    d: { x: 1, y: 0 }
+  };
+
+  window.addEventListener('keydown', event => {
+    if (event.repeat) return;
+    const key = event.key.toLowerCase();
+    if (key in moveMap) {
+      event.preventDefault();
+      audioEngine.ensure();
+      attemptMove(moveMap[key].x, moveMap[key].y);
+      return;
+    }
+    if (event.code === 'Enter' || event.code === 'Space') {
+      event.preventDefault();
+      audioEngine.ensure();
+      handleStartConfirm();
+      return;
+    }
+    if (key === 'p') {
+      event.preventDefault();
+      togglePause();
+      return;
+    }
+    if (key === 'm') {
+      event.preventDefault();
+      toggleAudio();
+    }
+  }, { passive: false });
+
+  window.addEventListener('blur', () => {
+    if (state === 'playing') state = 'paused';
+  });
+
+  function toggleAudio() {
+    audioEngine.muted = !audioEngine.muted;
+  }
+
+  // Grid-based movement keeps hopping neatly aligned to lanes.
+  function attemptMove(dx, dy) {
+    if (state !== 'playing') return;
+    const nextX = clamp(player.gridX + dx, 0, GRID_COLS - 1);
+    const nextY = clamp(player.gridY + dy, 0, GRID_ROWS - 1);
+    if (nextX === player.gridX && nextY === player.gridY) return;
+    player.gridX = nextX;
+    player.gridY = nextY;
+    player.hopTime = player.hopDuration;
+    audioEngine.play(520, 0.1, 'triangle');
+  }
+
+  function handleStartConfirm() {
+    if (state === 'menu' || state === 'gameover') {
+      startRun();
+    } else if (state === 'paused') {
+      state = 'playing';
+    }
+  }
+
+  function togglePause() {
+    if (state === 'playing') state = 'paused';
+    else if (state === 'paused') state = 'playing';
+  }
+
+  function startRun() {
+    score = 0;
+    deaths = 0;
+    player.lives = 3;
+    flashTimer = 0;
+    resetPlayer();
+    lanes.forEach(lane => lane.reset());
+    state = 'playing';
+  }
+
+  function resetPlayer() {
+    player.gridX = Math.floor(GRID_COLS / 2);
+    player.gridY = startRow;
+    player.hopTime = 0;
+    player.squashTime = 0;
+  }
+
+  function handleGoal() {
+    score += 1;
+    flashTimer = flashDuration;
+    audioEngine.play(780, 0.25, 'sine');
+    if (score > bestScore) {
+      bestScore = score;
+      localStorage.setItem(STORAGE_KEY, bestScore);
+    }
+    resetPlayer();
+  }
+
+  function triggerCrash() {
+    if (state !== 'playing') return;
+    player.lives -= 1;
+    deaths += 1;
+    player.squashTime = 0.25;
+    flashTimer = flashDuration;
+    audioEngine.play(190, 0.25, 'sawtooth');
+    if (player.lives <= 0) state = 'gameover';
+    resetPlayer();
+  }
+
+  function getPlayerBox() {
+    const x = player.gridX * TILE + (TILE - player.width) / 2;
+    const y = player.gridY * TILE + (TILE - player.height) / 2;
+    return { x, y, width: player.width, height: player.height };
+  }
+
+  function checkLaneHazards() {
+    const lane = laneLookup[player.gridY];
+    if (!lane) return;
+    const playerBox = getPlayerBox();
+    if (lane.type === 'road') {
+      for (const car of lane.entities) {
+        if (rectsOverlap(playerBox, car)) {
+          triggerCrash();
+          return;
+        }
+      }
+    } else if (lane.type === 'river') {
+      let onLog = false;
+      for (const log of lane.entities) {
+        if (rectsOverlap(playerBox, log)) {
+          onLog = true;
+          break;
+        }
+      }
+      if (!onLog) triggerCrash();
+    }
+  }
+
+  function rectsOverlap(a, b) {
+    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+  }
+
+  function getDifficulty() {
+    return 1 + score * 0.08 + deaths * 0.025;
+  }
+
+  function update(dt) {
+    titlePulse += dt * 1.2;
+    if (player.hopTime > 0) player.hopTime = Math.max(0, player.hopTime - dt);
+    if (player.squashTime > 0) player.squashTime = Math.max(0, player.squashTime - dt);
+    if (flashTimer > 0) flashTimer = Math.max(0, flashTimer - dt);
+    if (state !== 'playing') return;
+    const difficulty = getDifficulty();
+    lanes.forEach(lane => lane.update(dt, difficulty));
+    checkLaneHazards();
+    if (rowLayout[player.gridY] === 'goal') handleGoal();
+  }
+
+  function drawBackground() {
+    for (let row = 0; row < GRID_ROWS; row++) {
+      const type = rowLayout[row] || 'safe';
+      const y = row * TILE;
+      ctx.fillStyle = rowColors[type] || rowColors.safe;
+      ctx.fillRect(0, y, WIDTH, TILE);
+      if (type === 'road') drawRoadDetails(y);
+      else if (type === 'river') drawRiverDetails(y);
+      else if (type === 'safe' || type === 'start') drawGrassDetails(y, row);
+      else if (type === 'campus') drawCampusRow(y);
+      else if (type === 'goal') drawGoalRow(y);
+    }
+  }
+
+  function drawRoadDetails(y) {
+    const gradient = ctx.createLinearGradient(0, y, 0, y + TILE);
+    gradient.addColorStop(0, '#626262');
+    gradient.addColorStop(0.5, '#414141');
+    gradient.addColorStop(1, '#2f2f2f');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, y, WIDTH, TILE);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(0, y, WIDTH, 4);
+    ctx.fillRect(0, y + TILE - 4, WIDTH, 4);
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    ctx.lineWidth = 4;
+    ctx.setLineDash([28, 24]);
+    ctx.beginPath();
+    ctx.moveTo(0, y + TILE / 2);
+    ctx.lineTo(WIDTH, y + TILE / 2);
+    ctx.stroke();
+
+    ctx.lineWidth = 2;
+    ctx.setLineDash([10, 18]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.beginPath();
+    ctx.moveTo(0, y + TILE * 0.25);
+    ctx.lineTo(WIDTH, y + TILE * 0.25);
+    ctx.moveTo(0, y + TILE * 0.75);
+    ctx.lineTo(WIDTH, y + TILE * 0.75);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function drawRiverDetails(y) {
+    const gradient = ctx.createLinearGradient(0, y, 0, y + TILE);
+    gradient.addColorStop(0, '#1f9dec');
+    gradient.addColorStop(0.5, '#1370c9');
+    gradient.addColorStop(1, '#0f559c');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, y, WIDTH, TILE);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fillRect(0, y, WIDTH, 3);
+    ctx.fillRect(0, y + TILE - 3, WIDTH, 3);
+
+    const waveColor = 'rgba(255,255,255,0.4)';
+    ctx.strokeStyle = waveColor;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 3; i++) {
+      const offset = (Math.sin(titlePulse * 2 + i) * 0.2 + 0.45) * TILE;
+      ctx.beginPath();
+      ctx.moveTo(0, y + offset + i * 14);
+      ctx.bezierCurveTo(
+        WIDTH * 0.25,
+        y + offset + i * 18,
+        WIDTH * 0.55,
+        y + offset + i * 6,
+        WIDTH,
+        y + offset + i * 12
+      );
+      ctx.stroke();
+    }
+
+    for (let pad = 0; pad < WIDTH; pad += 160) {
+      const px = pad + 60;
+      ctx.fillStyle = '#aeea00';
+      ctx.beginPath();
+      ctx.ellipse(px, y + TILE * 0.75, 16, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#7cb342';
+      ctx.beginPath();
+      ctx.ellipse(px - 15, y + TILE * 0.8, 12, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawGrassDetails(y, row) {
+    const gradient = ctx.createLinearGradient(0, y, 0, y + TILE);
+    gradient.addColorStop(0, 'rgba(255,255,255,0.12)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0.08)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, y, WIDTH, TILE);
+
+    for (let x = 0; x < WIDTH; x += 140) {
+      const noise = pseudoNoise(row, x) * 60;
+      const cx = x + 50 + noise;
+      const cy = y + TILE - 12;
+      ctx.fillStyle = '#2f8a4c';
+      ctx.fillRect(cx - 5, cy - 10, 10, 30);
+      ctx.fillStyle = '#3ec973';
+      ctx.beginPath();
+      ctx.arc(cx, cy - 20, 20, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx - 14, cy - 10, 16, 0, Math.PI * 2);
+      ctx.arc(cx + 14, cy - 12, 18, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (let i = 0; i < WIDTH; i += 70) {
+      ctx.fillStyle = '#ffe26a';
+      ctx.beginPath();
+      ctx.arc(i + (row % 2 === 0 ? 30 : 10), y + TILE * 0.7, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ff7aa2';
+      ctx.beginPath();
+      ctx.arc(i + 20, y + TILE * 0.6, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (rowLayout[row] === 'start') {
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.fillRect(0, y + TILE - 10, WIDTH, 5);
+    }
+  }
+
+  function drawCampusRow(y) {
+    const gradient = ctx.createLinearGradient(0, y, 0, y + TILE);
+    gradient.addColorStop(0, '#fcd189');
+    gradient.addColorStop(1, '#f6a66a');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, y, WIDTH, TILE);
+
+    ctx.fillStyle = '#ffe8bf';
+    ctx.fillRect(WIDTH / 2 - 110, y + 6, 220, TILE - 12);
+    ctx.fillStyle = '#ffb347';
+    ctx.fillRect(WIDTH / 2 - 110, y + 6, 220, 6);
+
+    ctx.fillStyle = '#f7c391';
+    for (let i = -3; i <= 3; i++) {
+      const winX = WIDTH / 2 + i * 30 - 10;
+      ctx.fillRect(winX, y + 20, 20, 18);
+      ctx.fillRect(winX, y + 44, 20, 18);
+    }
+
+    ctx.fillStyle = '#e85d04';
+    ctx.font = 'bold 22px "Segoe UI", Tahoma, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('50 LPA HQ', WIDTH / 2, y + TILE / 2 + 6);
+  }
+
+  function drawGoalRow(y) {
+    const gradient = ctx.createLinearGradient(0, y, 0, y + TILE);
+    gradient.addColorStop(0, '#fff6d3');
+    gradient.addColorStop(1, '#ffe8a3');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, y, WIDTH, TILE);
+
+    ctx.fillStyle = '#fdd835';
+    drawRoundedRect(ctx, WIDTH / 2 - 110, y + 10, 220, TILE - 20, 14);
+    ctx.fillStyle = '#fff8e1';
+    drawRoundedRect(ctx, WIDTH / 2 - 90, y + 18, 180, TILE - 36, 10);
+    ctx.fillStyle = '#f57f17';
+    ctx.font = 'bold 24px "Segoe UI", Tahoma, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('OFFERS DESK', WIDTH / 2, y + TILE / 2 + 6);
+  }
+
+  function drawCar(car) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.4)';
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = car.color;
+    drawRoundedRect(ctx, car.x, car.y, car.width, car.height, 8);
+    ctx.restore();
+    ctx.fillStyle = '#1e1e1e';
+    const wheelRadius = 6;
+    ctx.beginPath();
+    ctx.arc(car.x + 12, car.y + car.height + 4, wheelRadius, 0, Math.PI * 2);
+    ctx.arc(car.x + car.width - 12, car.y + car.height + 4, wheelRadius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = car.windowColor;
+    ctx.fillRect(car.x + car.width * 0.15, car.y + 6, car.width * 0.7, car.height * 0.4);
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.fillRect(car.x + 5, car.y + 5, car.width - 10, car.height - 10);
+  }
+
+  function drawLog(log) {
+    ctx.save();
+    ctx.fillStyle = log.color;
+    drawRoundedRect(ctx, log.x, log.y, log.width, log.height, 10);
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    for (let i = 6; i < log.width; i += 22) {
+      ctx.fillRect(log.x + i, log.y + 6, 4, log.height - 12);
+    }
+    ctx.restore();
+  }
+
+  function drawPlayer() {
+    const box = getPlayerBox();
+    const hop = player.hopTime > 0 ? Math.sin((player.hopTime / player.hopDuration) * Math.PI) * 6 : 0;
+    const squashScale = player.squashTime > 0 ? 1 - Math.sin((player.squashTime / 0.25) * Math.PI) * 0.35 : 1;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(box.x + box.width / 2, box.y + box.height - 6, box.width / 2.4, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.translate(box.x + box.width / 2, box.y + box.height / 2 - hop);
+    ctx.scale(1, squashScale);
+
+    // Body suit
+    ctx.fillStyle = '#111';
+    drawRoundedRect(ctx, -box.width * 0.36, -box.height * 0.05, box.width * 0.72, box.height * 0.65, 12);
+    ctx.fillStyle = '#1e1e1e';
+    ctx.fillRect(-box.width * 0.2, -box.height * 0.04, box.width * 0.4, box.height * 0.62);
+    ctx.fillStyle = '#e0e0e0';
+    ctx.fillRect(-4, box.height * 0.05, 8, box.height * 0.35);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(-3, box.height * 0.05, 6, box.height * 0.2);
+
+    // Head
+    ctx.fillStyle = '#f0c4a4';
+    drawRoundedRect(ctx, -box.width * 0.25, -box.height * 0.55, box.width * 0.5, box.height * 0.35, 12);
+
+    // Hair referencing provided photo: swept right, darker top layer.
+    ctx.fillStyle = '#2c2a2c';
+    ctx.beginPath();
+    ctx.moveTo(-box.width * 0.3, -box.height * 0.55);
+    ctx.quadraticCurveTo(0, -box.height * 0.7, box.width * 0.35, -box.height * 0.5);
+    ctx.lineTo(box.width * 0.25, -box.height * 0.65);
+    ctx.quadraticCurveTo(0, -box.height * 0.85, -box.width * 0.35, -box.height * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#3e3534';
+    ctx.fillRect(-box.width * 0.18, -box.height * 0.58, box.width * 0.55, box.height * 0.12);
+
+    // Facial details.
+    ctx.fillStyle = '#2f2f2f';
+    ctx.fillRect(-box.width * 0.12, -box.height * 0.42, box.width * 0.09, 3);
+    ctx.fillRect(box.width * 0.03, -box.height * 0.42, box.width * 0.09, 3);
+    ctx.fillRect(-3, -box.height * 0.32, 6, 2);
+    ctx.fillRect(-box.width * 0.08, -box.height * 0.34, box.width * 0.16, 2);
+
+    ctx.restore();
+  }
+
+  function drawUI() {
+    ctx.save();
+    const hudHeight = 74;
+    const gradient = ctx.createLinearGradient(0, 0, 0, hudHeight);
+    gradient.addColorStop(0, '#ffffff');
+    gradient.addColorStop(1, '#e7f3ff');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, WIDTH, hudHeight);
+
+    const cards = [
+      { label: 'Offers Secured', value: score, x: WIDTH * 0.14 },
+      { label: 'Best Run', value: bestScore, x: WIDTH * 0.35 },
+      { label: 'Road Mishaps', value: deaths, x: WIDTH * 0.56 },
+      { label: 'Lives', value: player.lives, x: WIDTH * 0.78 }
+    ];
+    ctx.textAlign = 'center';
+    cards.forEach(card => {
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      drawRoundedRect(ctx, card.x - 85, 8, 170, 48, 14);
+      ctx.fillStyle = '#0d2538';
+      ctx.font = '13px "Segoe UI", Tahoma, sans-serif';
+      ctx.fillText(card.label, card.x, 28);
+      ctx.font = 'bold 22px "Segoe UI", Tahoma, sans-serif';
+      ctx.fillText(card.value, card.x, 52);
+    });
+
+    ctx.fillStyle = '#f4a261';
+    ctx.font = '16px "Segoe UI", Tahoma, sans-serif';
+    ctx.fillText('Goal: Dash to the offers desk and grab that 50 LPA package!', WIDTH / 2, hudHeight - 12);
+    ctx.fillStyle = '#2d4a6a';
+    ctx.font = '13px "Segoe UI", Tahoma, sans-serif';
+    ctx.fillText(audioEngine.muted ? 'Sound muted (press M to unmute)' : 'Sound on - press M to mute', WIDTH / 2, hudHeight - 30);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    drawRoundedRect(ctx, WIDTH / 2 - 230, HEIGHT - 38, 460, 28, 12);
+    ctx.fillStyle = '#1f3348';
+    ctx.font = '14px "Segoe UI", Tahoma, sans-serif';
+    ctx.fillText('Arrows/WASD move  |  P pause  |  M mute', WIDTH / 2, HEIGHT - 20);
+    ctx.restore();
+  }
+
+  function drawOverlay() {
+    if (state === 'playing') return;
+    ctx.save();
+    ctx.fillStyle = state === 'paused' ? 'rgba(33, 64, 91, 0.55)' : 'rgba(15, 31, 48, 0.75)';
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    const pulse = 0.4 + Math.sin(titlePulse * 1.4) * 0.3;
+    if (state === 'menu') {
+      ctx.font = 'bold 60px "Segoe UI", Tahoma, sans-serif';
+      ctx.fillText('Neon Cross: 50 LPA Run', WIDTH / 2, HEIGHT / 2 - 80);
+      ctx.font = '22px "Segoe UI", Tahoma, sans-serif';
+      ctx.fillText('Use Arrow Keys or WASD to guide yourself across city lanes.', WIDTH / 2, HEIGHT / 2 - 30);
+      ctx.fillText('Reach the campus gate without getting hit or falling in the river.', WIDTH / 2, HEIGHT / 2 + 10);
+      ctx.fillText(`Best Score: ${bestScore}`, WIDTH / 2, HEIGHT / 2 + 50);
+      ctx.fillStyle = `rgba(255,255,255,${0.5 + pulse * 0.5})`;
+      ctx.fillText('Press ENTER or SPACE to Start', WIDTH / 2, HEIGHT / 2 + 100);
+    } else if (state === 'paused') {
+      ctx.font = 'bold 56px "Segoe UI", Tahoma, sans-serif';
+      ctx.fillText('Paused', WIDTH / 2, HEIGHT / 2 - 20);
+      ctx.font = '22px "Segoe UI", Tahoma, sans-serif';
+      ctx.fillText('Press P to resume the job hunt', WIDTH / 2, HEIGHT / 2 + 30);
+    } else if (state === 'gameover') {
+      ctx.font = 'bold 58px "Segoe UI", Tahoma, sans-serif';
+      ctx.fillText('Game Over', WIDTH / 2, HEIGHT / 2 - 60);
+      ctx.font = '24px "Segoe UI", Tahoma, sans-serif';
+      ctx.fillText(`Offers Secured: ${score}`, WIDTH / 2, HEIGHT / 2 - 10);
+      ctx.fillText(`Best: ${bestScore}`, WIDTH / 2, HEIGHT / 2 + 30);
+      ctx.fillText('Press ENTER or SPACE to retry the run', WIDTH / 2, HEIGHT / 2 + 80);
+    }
+    ctx.restore();
+  }
+
+  function drawFlash() {
+    if (flashTimer <= 0) return;
+    const intensity = flashTimer / flashDuration;
+    ctx.fillStyle = `rgba(255, 245, 200, ${intensity * 0.45})`;
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  }
+
+  function drawRoundedRect(ctx, x, y, width, height, radius) {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function randomRange(min, max) {
+    return Math.random() * (max - min) + min;
+  }
+
+  function pick(array) {
+    return array[Math.floor(Math.random() * array.length)];
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function pseudoNoise(row, x) {
+    const seed = Math.sin((row + 1) * 9283.133 + x * 0.03) * 43758.5453;
+    return seed - Math.floor(seed);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    drawBackground();
+    lanes.forEach(lane => lane.draw(ctx));
+    drawPlayer();
+    drawUI();
+    drawFlash();
+    drawOverlay();
+  }
+
+  function loop(timestamp) {
+    const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+    lastTime = timestamp;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
