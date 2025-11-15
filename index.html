@@ -16,9 +16,15 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px 0 32px;
   background: linear-gradient(180deg, #b3e5ff 0%, #e0f7ff 30%, #fdfaf2 100%);
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   color: #0f1821;
+}
+.stage {
+  position: relative;
 }
 canvas {
   width: min(94vw, 1080px);
@@ -30,14 +36,173 @@ canvas {
   box-shadow: 0 18px 45px rgba(42, 63, 93, 0.35), 0 0 65px rgba(17, 42, 84, 0.35);
   border: 3px solid rgba(255, 255, 255, 0.7);
 }
+#musicToggle {
+  position: absolute;
+  top: 16px;
+  right: 22px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, #ff7a18, #ffb347);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+#musicToggle:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.25);
+}
+#musicToggle:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, 0.8);
+  outline-offset: 3px;
+}
+#musicToggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.coach-panel {
+  width: min(94vw, 960px);
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 18px;
+  box-shadow: 0 12px 28px rgba(17, 37, 66, 0.2);
+  padding: 18px 22px 22px;
+  color: #1b2a41;
+}
+.coach-panel h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  color: #0b3d60;
+}
+.coach-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+#apiKeyInput {
+  flex: 1 1 260px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(11, 61, 96, 0.2);
+  font-size: 14px;
+}
+#aiAdviceBtn {
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #3a86ff, #9b5de5);
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(32, 60, 105, 0.25);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+#aiAdviceBtn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+  box-shadow: none;
+}
+#aiAdviceBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 22px rgba(32, 60, 105, 0.35);
+}
+.coach-info {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: rgba(20, 36, 53, 0.8);
+}
+#aiAdviceBox {
+  background: rgba(58, 134, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px;
+  min-height: 72px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #102235;
+}
 </style>
 </head>
 <body>
-<canvas id="game" width="960" height="540"></canvas>
+<div class="stage">
+  <canvas id="game" width="960" height="540"></canvas>
+  <button id="musicToggle" type="button">Play Music</button>
+</div>
+<div class="coach-panel">
+  <h2>IIC Career Advisor</h2>
+  <div class="coach-row">
+    <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Paste your OpenRouter API key to unlock AI tips">
+    <button id="aiAdviceBtn" type="button">Get AI Advice</button>
+  </div>
+  <p class="coach-info">A default OpenRouter key is bundled for quick demos (you can paste your own to override). The advisor calls the TNG: DeepSeek R1T2 Chimera model for motivational tips.</p>
+  <div id="aiAdviceBox">Advisor notes will show up here after your next goal or when you click the button.</div>
+</div>
 <script>
 (() => {
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
+  const DEFAULT_OPENROUTER_KEY = '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';
+  const OPENROUTER_MODEL = 'openrouter/tng-deepseek-r1t2-chimera';
+
+  const musicButton = document.getElementById('musicToggle');
+  const apiKeyInput = document.getElementById('apiKeyInput');
+  const aiAdviceBtn = document.getElementById('aiAdviceBtn');
+  const aiAdviceBox = document.getElementById('aiAdviceBox');
+  const audioSupported = !!(window.AudioContext || window.webkitAudioContext);
+  const KEY_STORAGE = 'neonCrossOpenRouterKey';
+  let customOpenRouterKey = '';
+  try {
+    customOpenRouterKey = sessionStorage.getItem(KEY_STORAGE) || '';
+  } catch (_) {
+    customOpenRouterKey = '';
+  }
+  let aiAdviceLoading = false;
+  let lastRunSummary = 'No runs yet.';
+  let lastAdviceTime = 0;
+  const ADVICE_COOLDOWN = 12; // seconds between automatic AI requests
+
+  if (!audioSupported) {
+    musicButton.disabled = true;
+    musicButton.textContent = 'Audio unavailable';
+  }
+  const getActiveKey = () => customOpenRouterKey || DEFAULT_OPENROUTER_KEY;
+  const isUsingFallbackKey = () => !customOpenRouterKey;
+
+  if (apiKeyInput) {
+    apiKeyInput.value = getActiveKey();
+    apiKeyInput.addEventListener('input', event => {
+      customOpenRouterKey = event.target.value.trim();
+      try {
+        if (customOpenRouterKey) {
+          sessionStorage.setItem(KEY_STORAGE, customOpenRouterKey);
+        } else {
+          sessionStorage.removeItem(KEY_STORAGE);
+        }
+      } catch (_) {
+        // Storage might be unavailable (private browsing). Ignore.
+      }
+    });
+    apiKeyInput.addEventListener('blur', () => {
+      if (!customOpenRouterKey) {
+        apiKeyInput.value = DEFAULT_OPENROUTER_KEY;
+      }
+    });
+  }
+  if (aiAdviceBtn) {
+    aiAdviceBtn.addEventListener('click', () => {
+      updateRunSummary('Manual advice request');
+      requestAiAdvice('Manual button');
+    });
+  }
+  setCoachMessage(
+    isUsingFallbackKey()
+      ? 'Using built-in OpenRouter key. Press ENTER to start a run and the IIC Career Advisor will drop tips after each offer.'
+      : 'Custom key detected. Press ENTER to start a run and the IIC Career Advisor will drop tips after each offer.'
+  );
 
   const WIDTH = canvas.width;
   const HEIGHT = canvas.height;
@@ -76,6 +241,43 @@ canvas {
     road: '#545454',
     river: '#1b75c8',
     start: '#8ad999'
+  };
+
+  const musicLoop = {
+    playing: false,
+    timer: null,
+    step: 0,
+    sequence: [0, 5, 7, 12, 7, 5, 3, 5],
+    start() {
+      const ctx = audioEngine.getContext();
+      if (!ctx || this.playing) return;
+      if (ctx.state === 'suspended') ctx.resume();
+      this.playing = true;
+      this.step = 0;
+      this.playStep();
+      this.timer = setInterval(() => this.playStep(), 520);
+    },
+    stop() {
+      this.playing = false;
+      if (this.timer) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+    },
+    playStep() {
+      if (!this.playing) return;
+      const baseFreq = 220;
+      const note = this.sequence[this.step % this.sequence.length];
+      const mainFreq = baseFreq * Math.pow(2, note / 12);
+      playBackgroundNote(mainFreq, 0.5, 0.05, 'sine');
+      if (this.step % 2 === 0) {
+        playBackgroundNote(mainFreq * 0.5, 0.55, 0.035, 'triangle');
+      }
+      if (this.step % 4 === 0) {
+        playBackgroundNote(mainFreq * 2, 0.18, 0.028, 'square');
+      }
+      this.step += 1;
+    }
   };
 
   // Each lane describes a moving hazard row.
@@ -192,6 +394,10 @@ canvas {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (AudioCtx) this.ctx = new AudioCtx();
     },
+    getContext() {
+      this.ensure();
+      return this.ctx;
+    },
     play(frequency, duration = 0.16, type = 'sine') {
       if (this.muted) return;
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -251,6 +457,18 @@ canvas {
     if (state === 'playing') state = 'paused';
   });
 
+  if (audioSupported) {
+    musicButton.addEventListener('click', () => {
+      if (musicLoop.playing) {
+        musicLoop.stop();
+      } else {
+        musicLoop.start();
+      }
+      updateMusicButtonLabel();
+    });
+  }
+  updateMusicButtonLabel();
+
   function toggleAudio() {
     audioEngine.muted = !audioEngine.muted;
   }
@@ -288,6 +506,12 @@ canvas {
     resetPlayer();
     lanes.forEach(lane => lane.reset());
     state = 'playing';
+    updateRunSummary('Fresh run started');
+    if (isUsingFallbackKey()) {
+      setCoachMessage('Run started! Using built-in key for IIC Career Advisor pep talks. Paste your own to personalize the experience.');
+    } else {
+      setCoachMessage('Run started! Reach the offers desk to hear from your IIC Career Advisor.');
+    }
   }
 
   function resetPlayer() {
@@ -306,6 +530,7 @@ canvas {
       localStorage.setItem(STORAGE_KEY, bestScore);
     }
     resetPlayer();
+    maybeAutoAdvice('Goal reached');
   }
 
   function triggerCrash() {
@@ -315,7 +540,11 @@ canvas {
     player.squashTime = 0.25;
     flashTimer = flashDuration;
     audioEngine.play(190, 0.25, 'sawtooth');
-    if (player.lives <= 0) state = 'gameover';
+    updateRunSummary(`Collision - lives left ${player.lives}`);
+    if (player.lives <= 0) {
+      state = 'gameover';
+      maybeAutoAdvice('Game over');
+    }
     resetPlayer();
   }
 
@@ -696,6 +925,105 @@ canvas {
     const intensity = flashTimer / flashDuration;
     ctx.fillStyle = `rgba(255, 245, 200, ${intensity * 0.45})`;
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  }
+
+  function updateMusicButtonLabel() {
+    if (!musicButton || !audioSupported) return;
+    musicButton.textContent = musicLoop.playing ? 'Mute Music' : 'Play Music';
+  }
+
+  function playBackgroundNote(frequency, duration, volume, type = 'sine') {
+    const ctx = audioEngine.getContext();
+    if (!ctx || !musicLoop.playing) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = frequency;
+    gain.gain.setValueAtTime(volume, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + duration);
+  }
+
+  function setCoachMessage(message) {
+    if (!aiAdviceBox) return;
+    aiAdviceBox.textContent = message;
+  }
+
+  function updateRunSummary(reason) {
+    lastRunSummary = `Event: ${reason}. Score ${score}, Best ${bestScore}, Lives ${player.lives}, Deaths ${deaths}, Difficulty ${getDifficulty().toFixed(2)}.`;
+    return lastRunSummary;
+  }
+
+  function maybeAutoAdvice(reason) {
+    updateRunSummary(reason);
+    if (!aiAdviceBox) return;
+    const now = performance.now() / 1000;
+    if (aiAdviceLoading || now - lastAdviceTime < ADVICE_COOLDOWN) {
+      return;
+    }
+    lastAdviceTime = now;
+    requestAiAdvice(`Auto trigger: ${reason}`);
+  }
+
+  async function requestAiAdvice(triggerSource = 'auto') {
+    const key = getActiveKey();
+    if (!key) {
+      setCoachMessage('No OpenRouter key available. Please refresh.');
+      return;
+    }
+    const usingFallback = isUsingFallbackKey();
+    if (aiAdviceLoading) return;
+    aiAdviceLoading = true;
+    if (aiAdviceBtn) {
+      aiAdviceBtn.disabled = true;
+      aiAdviceBtn.textContent = 'Contacting AI...';
+    }
+    setCoachMessage(usingFallback ? 'Using built-in OpenRouter key to fetch fresh advisor advice...' : 'Contacting your IIC Career Advisor for a new idea...');
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${key}`,
+          'HTTP-Referer': window.location.href,
+          'X-Title': 'Neon Cross IIC Career Advisor'
+        },
+        body: JSON.stringify({
+          model: OPENROUTER_MODEL,
+          temperature: 0.8,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are the IIC Career Advisor for the Neon Cross arcade. Give concise (<=2 sentences) motivational guidance that links dodging traffic with preparing for interviews.'
+            },
+            {
+              role: 'user',
+              content: `Game summary: ${lastRunSummary}. Trigger: ${triggerSource}. Offer an actionable, positive tip referencing the 50 LPA goal.`
+            }
+          ]
+        })
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      const advice = data.choices?.[0]?.message?.content?.trim();
+      if (advice) {
+        setCoachMessage(advice);
+      } else {
+        setCoachMessage('AI responded but no content was returned.');
+      }
+    } catch (error) {
+      setCoachMessage(`AI error: ${error.message}`);
+    } finally {
+      aiAdviceLoading = false;
+      if (aiAdviceBtn) {
+        aiAdviceBtn.disabled = false;
+        aiAdviceBtn.textContent = 'Get AI Advice';
+      }
+    }
   }
 
   function drawRoundedRect(ctx, x, y, width, height, radius) {
