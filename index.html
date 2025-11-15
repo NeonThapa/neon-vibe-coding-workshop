@@ -130,7 +130,7 @@ canvas {
   <div class="coach-row">
     <button id="aiAdviceBtn" type="button">Get AI Advice</button>
   </div>
-  <p class="coach-info">The advisor uses a built-in OpenRouter key to call the TNG: DeepSeek R1T2 Chimera model for motivational tips.</p>
+  <p class="coach-info">The advisor uses a built-in OpenRouter key to call the tngtech/deepseek-r1t2-chimera:free model for motivational tips.</p>
   <div id="aiAdviceBox">Advisor notes will show up here after your next goal or when you click the button.</div>
 </div>
 <script>
@@ -138,7 +138,7 @@ canvas {
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
   const DEFAULT_OPENROUTER_KEY = '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';
-  const OPENROUTER_MODEL = 'openrouter/tng-deepseek-r1t2-chimera';
+  const OPENROUTER_MODEL = 'tngtech/deepseek-r1t2-chimera:free';
 
   const musicButton = document.getElementById('musicToggle');
   const aiAdviceBtn = document.getElementById('aiAdviceBtn');
