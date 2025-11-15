@@ -79,6 +79,7 @@ canvas {
 }
 .coach-row {
   display: flex;
+  gap: 12px;
   justify-content: flex-start;
   margin-bottom: 12px;
   flex-wrap: wrap;
@@ -130,22 +131,25 @@ canvas {
   <div class="coach-row">
     <button id="aiAdviceBtn" type="button">Get AI Advice</button>
   </div>
-  <p class="coach-info">The advisor uses a built-in OpenRouter key to call the tngtech/deepseek-r1t2-chimera:free model for motivational tips.</p>
+  <p class="coach-info">Deploy the secure proxy in <code>/proxy</code> with your OpenRouter key. Locally it listens on <strong>http://localhost:8787/api/advice</strong>; when hosting elsewhere set <code>window.__ADVISOR_PROXY__</code> to the full URL of your deployed proxy.</p>
   <div id="aiAdviceBox">Advisor notes will show up here after your next goal or when you click the button.</div>
 </div>
+<!-- When deploying, set window.__ADVISOR_PROXY__ = 'https://your-proxy-url/api/advice' before this script block. -->
 <script>
 (() => {
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
-  const DEFAULT_OPENROUTER_KEY = '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';
-  const OPENROUTER_MODEL = 'tngtech/deepseek-r1t2-chimera:free';
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const ADVISOR_ENDPOINT = window.__ADVISOR_PROXY__ || (isLocalhost ? 'http://localhost:8787/api/advice' : '');
+  const advisorConfigured = Boolean(ADVISOR_ENDPOINT);
+  if (!advisorConfigured) {
+    console.warn('IIC Career Advisor proxy is not configured. Set window.__ADVISOR_PROXY__ to your deployed proxy URL.');
+  }
 
   const musicButton = document.getElementById('musicToggle');
   const aiAdviceBtn = document.getElementById('aiAdviceBtn');
   const aiAdviceBox = document.getElementById('aiAdviceBox');
   const audioSupported = !!(window.AudioContext || window.webkitAudioContext);
-  const getActiveKey = () => DEFAULT_OPENROUTER_KEY;
-  const isUsingFallbackKey = () => true;
   let aiAdviceLoading = false;
   let lastRunSummary = 'No runs yet.';
   let lastAdviceTime = 0;
@@ -161,7 +165,11 @@ canvas {
       requestAiAdvice('Manual button');
     });
   }
-  setCoachMessage('Using built-in OpenRouter key. Press ENTER to start a run and the IIC Career Advisor will drop tips after each offer.');
+  setCoachMessage(
+    advisorConfigured
+      ? 'IIC Career Advisor ready. Press ENTER to start a run and collect tips after each offer.'
+      : 'IIC Career Advisor offline. Deploy the proxy in /proxy and set window.__ADVISOR_PROXY__ to its URL to unlock advice.'
+  );
 
   const WIDTH = canvas.width;
   const HEIGHT = canvas.height;
@@ -466,7 +474,11 @@ canvas {
     lanes.forEach(lane => lane.reset());
     state = 'playing';
     updateRunSummary('Fresh run started');
-    setCoachMessage('Run started! The IIC Career Advisor is listening—reach the offers desk for fresh guidance.');
+    if (advisorConfigured) {
+      setCoachMessage('Run started! The IIC Career Advisor is listening—reach the offers desk for fresh guidance.');
+    } else {
+      setCoachMessage('Run started! Configure the advisor proxy (see /proxy) to unlock AI guidance.');
+    }
   }
 
   function resetPlayer() {
@@ -914,6 +926,10 @@ canvas {
   function maybeAutoAdvice(reason) {
     updateRunSummary(reason);
     if (!aiAdviceBox) return;
+    if (!advisorConfigured) {
+      setCoachMessage(`Deploy the advisor proxy (see /proxy) and set window.__ADVISOR_PROXY__ to its URL to unlock guidance. Last highlight: ${reason}.`);
+      return;
+    }
     const now = performance.now() / 1000;
     if (aiAdviceLoading || now - lastAdviceTime < ADVICE_COOLDOWN) {
       return;
@@ -923,55 +939,45 @@ canvas {
   }
 
   async function requestAiAdvice(triggerSource = 'auto') {
-    const key = getActiveKey();
-    if (!key) {
-      setCoachMessage('No OpenRouter key available. Please refresh.');
+    if (!advisorConfigured) {
+      setCoachMessage('Advisor proxy not configured. Deploy the proxy in /proxy and set window.__ADVISOR_PROXY__ to its URL.');
       return;
     }
-    const usingFallback = isUsingFallbackKey();
     if (aiAdviceLoading) return;
     aiAdviceLoading = true;
     if (aiAdviceBtn) {
       aiAdviceBtn.disabled = true;
       aiAdviceBtn.textContent = 'Contacting AI...';
     }
-    setCoachMessage(usingFallback ? 'Using built-in OpenRouter key to fetch fresh advisor advice...' : 'Contacting your IIC Career Advisor for a new idea...');
+    setCoachMessage('Contacting your IIC Career Advisor for a new idea...');
     try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      const response = await fetch(ADVISOR_ENDPOINT, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${key}`,
-          'HTTP-Referer': window.location.href,
-          'X-Title': 'Neon Cross IIC Career Advisor'
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          model: OPENROUTER_MODEL,
-          temperature: 0.8,
-          messages: [
-            {
-              role: 'system',
-              content: 'You are the IIC Career Advisor for the Neon Cross arcade. Give concise (<=2 sentences) motivational guidance that links dodging traffic with preparing for interviews.'
-            },
-            {
-              role: 'user',
-              content: `Game summary: ${lastRunSummary}. Trigger: ${triggerSource}. Offer an actionable, positive tip referencing the 50 LPA goal.`
-            }
-          ]
+          summary: lastRunSummary,
+          trigger: triggerSource,
+          score,
+          best: bestScore,
+          deaths,
+          lives: player.lives,
+          difficulty: Number(getDifficulty().toFixed(2))
         })
       });
+      const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(payload?.error || `Proxy error ${response.status}`);
       }
-      const data = await response.json();
-      const advice = data.choices?.[0]?.message?.content?.trim();
+      const advice = payload.advice || payload.message || payload.raw?.choices?.[0]?.message?.content?.trim();
       if (advice) {
         setCoachMessage(advice);
       } else {
-        setCoachMessage('AI responded but no content was returned.');
+        setCoachMessage('Advisor responded without content. Check your proxy logs.');
       }
     } catch (error) {
-      setCoachMessage(`AI error: ${error.message}`);
+      setCoachMessage(`Advisor error: ${error.message || error}`);
     } finally {
       aiAdviceLoading = false;
       if (aiAdviceBtn) {
